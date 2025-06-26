@@ -3,8 +3,8 @@
 #include <iostream>
 #include <glm/gtc/matrix_access.hpp>
 
-#define LOAD_RADIUS 4
-#define UNLOAD_RADIUS 5
+#define LOAD_RADIUS 8
+#define UNLOAD_RADIUS 10
 
 World::World() : lastUpdateTime(0.0f), running(true)
 {

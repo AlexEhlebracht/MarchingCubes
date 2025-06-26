@@ -6,7 +6,7 @@
 
 #define CHUNK_SIZE 32
 #define CHUNK_HEIGHT 16
-#define VOXEL_SIZE 8
+#define VOXEL_SIZE 4
 
 class Chunk
 {

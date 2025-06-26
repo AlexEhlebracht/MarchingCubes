@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 
+
 Chunk::Chunk(glm::ivec2 pos)
     : position(pos), mesh(nullptr), dirty(true)
 {
@@ -25,12 +26,10 @@ Chunk::Chunk(glm::ivec2 pos)
 
 Chunk::~Chunk()
 {
-    if (mesh) delete mesh;
+    if (mesh)
+        delete mesh;
 }
 
-/* -------------------------------------------------------------
-   Density field
-------------------------------------------------------------- */
 void Chunk::generateDensityField()
 {
     int worldX = position.x * CHUNK_SIZE;
@@ -71,9 +70,6 @@ float Chunk::getDensityAt(int x, int y, int z)
     return height - ny;
 }
 
-/* -------------------------------------------------------------
-   Marching-Cubes polygonisation (smooth normals only)
-------------------------------------------------------------- */
 void Chunk::polygoniseCube(int x, int y, int z,
     std::vector<glm::vec3>& vertices,
     std::vector<glm::vec3>& colors,
@@ -94,21 +90,28 @@ void Chunk::polygoniseCube(int x, int y, int z,
     d[6] = getDensityAt(x + 1, y + 1, z + 1);
     d[7] = getDensityAt(x, y + 1, z + 1);
 
-    bool allIn = true, allOut = true;
+    bool allInside = true, allOutside = true;
     for (int i = 0; i < 8; ++i)
     {
-        if (d[i] <= isoLevel) allIn = false;
-        if (d[i] >= isoLevel) allOut = false;
+        if (d[i] <= isoLevel)
+            allInside = false;
+        if (d[i] >= isoLevel)
+            allOutside = false;
     }
-    if (allIn || allOut) return;
+    if (allInside || allOutside)
+        return;
 
     int cubeIndex = 0;
     for (int i = 0; i < 8; ++i)
-        if (d[i] < isoLevel) cubeIndex |= (1 << i);
-    if (edgeTable[cubeIndex] == 0) return;
+        if (d[i] < isoLevel)
+            cubeIndex |= 1 << i;
+
+    if (edgeTable[cubeIndex] == 0)
+        return;
 
     glm::vec3 vertList[12];
     for (int i = 0; i < 12; ++i)
+    {
         if (edgeTable[cubeIndex] & (1 << i))
         {
             int v0 = edgeVertexIndices[i][0];
@@ -120,31 +123,7 @@ void Chunk::polygoniseCube(int x, int y, int z,
             glm::vec3 p1 = (vertexOffsets[v1] + glm::vec3(x, y, z)) * float(VOXEL_SIZE);
             vertList[i] = glm::mix(p0, p1, t);
         }
-
-    /* World-space gradient helpers */
-    const float eps = 0.25f * VOXEL_SIZE;
-
-    auto sampleDensity = [&](const glm::vec3& p)->float
-        {
-            float wx = p.x + position.x * CHUNK_SIZE * VOXEL_SIZE;
-            float wy = p.y;
-            float wz = p.z + position.y * CHUNK_SIZE * VOXEL_SIZE;
-            float baseH = 8.0f;
-            float varH = 8.0f;
-            float h = baseH + varH * noise.GetNoise(wx, wz);
-            return h - wy;
-        };
-
-    auto grad = [&](const glm::vec3& p)->glm::vec3
-        {
-            float dx = sampleDensity(p + glm::vec3(+eps, 0, 0)) -
-                sampleDensity(p + glm::vec3(-eps, 0, 0));
-            float dy = sampleDensity(p + glm::vec3(0, +eps, 0)) -
-                sampleDensity(p + glm::vec3(0, -eps, 0));
-            float dz = sampleDensity(p + glm::vec3(0, 0, +eps)) -
-                sampleDensity(p + glm::vec3(0, 0, -eps));
-            return glm::vec3(dx, dy, dz);
-        };
+    }
 
     for (int i = 0; triTable[cubeIndex][i] != -1; i += 3)
     {
@@ -160,9 +139,41 @@ void Chunk::polygoniseCube(int x, int y, int z,
         colors.push_back(cubeColor);
         colors.push_back(cubeColor);
 
-        glm::vec3 n0 = -glm::normalize(grad(v0));
-        glm::vec3 n1 = -glm::normalize(grad(v1));
-        glm::vec3 n2 = -glm::normalize(grad(v2));
+        const float eps = 0.25f * VOXEL_SIZE;  // Gradient step in world units
+
+        auto sampleDensity = [&](const glm::vec3& p) -> float
+            {
+                float wx = p.x + position.x * CHUNK_SIZE * VOXEL_SIZE;
+                float wy = p.y;                                  // already world Y
+                float wz = p.z + position.y * CHUNK_SIZE * VOXEL_SIZE;
+
+                float baseHeight = 8.0f;
+                float heightVariation = 8.0f;
+                float height = baseHeight + heightVariation * noise.GetNoise(wx, wz);
+                return height - wy;
+            };
+
+        auto gradient = [&](const glm::vec3& p) -> glm::vec3
+            {
+                float dx = sampleDensity(glm::vec3(p.x + eps, p.y, p.z)) -
+                    sampleDensity(glm::vec3(p.x - eps, p.y, p.z));
+                float dy = sampleDensity(glm::vec3(p.x, p.y + eps, p.z)) -
+                    sampleDensity(glm::vec3(p.x, p.y - eps, p.z));
+                float dz = sampleDensity(glm::vec3(p.x, p.y, p.z + eps)) -
+                    sampleDensity(glm::vec3(p.x, p.y, p.z - eps));
+                return glm::vec3(dx, dy, dz);
+            };
+
+        glm::vec3 n0 = -glm::normalize(gradient(v0));
+        glm::vec3 n1 = -glm::normalize(gradient(v1));
+        glm::vec3 n2 = -glm::normalize(gradient(v2));
+
+        if (glm::length(n0) < 1e-3f)
+            n0 = glm::vec3(0.0f, 1.0f, 0.0f);
+        if (glm::length(n1) < 1e-3f)
+            n1 = glm::vec3(0.0f, 1.0f, 0.0f);
+        if (glm::length(n2) < 1e-3f)
+            n2 = glm::vec3(0.0f, 1.0f, 0.0f);
 
         normals.push_back(n0);
         normals.push_back(n1);
@@ -175,16 +186,21 @@ void Chunk::polygoniseCube(int x, int y, int z,
     }
 }
 
-/* ------------------------------------------------------------- */
-
 void Chunk::buildMeshData(std::vector<glm::vec3>& vertices,
     std::vector<glm::vec3>& colors,
     std::vector<glm::vec3>& normals,
     std::vector<unsigned int>& indices)
 {
-    if (!dirty) return;
+    if (!dirty)
+        return;
 
-    vertices.clear(); colors.clear(); normals.clear(); indices.clear();
+    double start = glfwGetTime();
+
+    vertices.clear();
+    colors.clear();
+    normals.clear();
+    indices.clear();
+
     int indexOffset = 0;
     float isoLevel = 0.0f;
 
@@ -193,33 +209,39 @@ void Chunk::buildMeshData(std::vector<glm::vec3>& vertices,
             for (int z = 0; z < CHUNK_SIZE; ++z)
                 polygoniseCube(x, y, z, vertices, colors, normals, indices, indexOffset, isoLevel);
 
-    glm::vec3 offset(position.x * CHUNK_SIZE * VOXEL_SIZE, 0.0f,
+    glm::vec3 offset(position.x * CHUNK_SIZE * VOXEL_SIZE,
+        0.0f,
         position.y * CHUNK_SIZE * VOXEL_SIZE);
-    for (auto& v : vertices) v += offset;
+    for (auto& v : vertices)
+        v += offset;
 
     dirty = false;
 }
 
-bool Chunk::generateData(std::vector<glm::vec3>& v,
-    std::vector<glm::vec3>& c,
-    std::vector<glm::vec3>& n,
-    std::vector<unsigned int>& ind)
+bool Chunk::generateData(std::vector<glm::vec3>& vertices,
+    std::vector<glm::vec3>& colors,
+    std::vector<glm::vec3>& normals,
+    std::vector<unsigned int>& indices)
 {
-    if (dirty) generateDensityField();
-    buildMeshData(v, c, n, ind);
-    return !v.empty();
+    if (dirty)
+        generateDensityField();
+
+    buildMeshData(vertices, colors, normals, indices);
+    return !vertices.empty();
 }
 
-void Chunk::finalize(std::vector<glm::vec3>& v,
-    std::vector<glm::vec3>& c,
-    std::vector<glm::vec3>& n,
-    std::vector<unsigned int>& ind)
+void Chunk::finalize(std::vector<glm::vec3>& vertices,
+    std::vector<glm::vec3>& colors,
+    std::vector<glm::vec3>& normals,
+    std::vector<unsigned int>& indices)
 {
-    if (mesh) delete mesh;
-    mesh = v.empty() ? nullptr : new Mesh(v, c, n, ind);
+    if (mesh)
+        delete mesh;
+    mesh = vertices.empty() ? nullptr : new Mesh(vertices, colors, normals, indices);
 }
 
 void Chunk::draw(const Shader& shader)
 {
-    if (mesh) mesh->draw();
+    if (mesh)
+        mesh->draw();
 }
