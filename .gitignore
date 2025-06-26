@@ -1,0 +1,25 @@
+# Ignore build outputs
+bin/
+obj/
+
+# Ignore Visual Studio files
+*.user
+*.suo
+*.vs/
+.vscode/
+
+# Ignore build logs
+*.log
+
+# Ignore NuGet packages
+*.nupkg
+packages/
+
+# Ignore other common files
+*.cache
+*.pdb
+*.exe
+*.dll
+
+# Ignore Rider files (if any)
+.idea/
