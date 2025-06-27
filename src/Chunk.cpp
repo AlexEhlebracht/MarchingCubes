@@ -17,17 +17,49 @@ Chunk::Chunk(glm::ivec2 pos)
         std::vector<std::vector<float>>(CHUNK_HEIGHT + 1,
             std::vector<float>(CHUNK_SIZE + 1)));
 
-    noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    noise.SetFrequency(0.01f);
-    noise.SetFractalOctaves(1);
-    noise.SetFractalLacunarity(2.0f);
-    noise.SetFractalGain(0.5f);
+    // --- Continental (very low frequency) ---
+    continentalNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+    continentalNoise.SetFrequency(0.0001f);          // big features
+    continentalNoise.SetFractalOctaves(4);
+    continentalNoise.SetFractalGain(0.5f);
+
+    // --- Hills (low frequency) ---
+    hillNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+    hillNoise.SetFrequency(0.001f);
+    hillNoise.SetFractalOctaves(3);
+    hillNoise.SetFractalGain(0.5f);
+
+    // --- Detail (medium frequency) ---
+    detailNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+    detailNoise.SetFrequency(0.003f);
+    detailNoise.SetFractalOctaves(2);
+    detailNoise.SetFractalGain(0.4f);
 }
 
 Chunk::~Chunk()
 {
     if (mesh)
         delete mesh;
+}
+
+// Return surface height in *world* units
+float Chunk::getPlainsNoise(float wx, float wz) const
+{
+    float continental = continentalNoise.GetNoise(wx, wz) * 0.6f;
+    float hills = hillNoise.GetNoise(wx, wz) * 0.3f;
+    float detail = detailNoise.GetNoise(wx, wz) * 0.1f;
+
+    float n = continental + hills + detail;
+    return glm::clamp(n, -1.0f, 1.0f);
+}
+
+float Chunk::getPlainsHeight(float wx, float wz) const
+{
+    // macros are defined in *blocks*, not world units
+    const float base = BASE_HEIGHT * 4;
+    const float variation = HEIGHT_VARIATION * 4;
+
+    return base + variation * getPlainsNoise(wx, wz);  // world units
 }
 
 void Chunk::generateDensityField()
@@ -39,19 +71,16 @@ void Chunk::generateDensityField()
         for (int y = 0; y <= CHUNK_HEIGHT; ++y)
             for (int z = 0; z <= CHUNK_SIZE; ++z)
             {
-                float nx = (x + worldX) * VOXEL_SIZE;
-                float ny = y * VOXEL_SIZE;
-                float nz = (z + worldZ) * VOXEL_SIZE;
+                float wx = (x + worldX) * VOXEL_SIZE;
+                float wy = y * VOXEL_SIZE;
+                float wz = (z + worldZ) * VOXEL_SIZE;
 
-                float baseHeight = 8.0f;
-                float heightVariation = 8.0f;
-                float height = baseHeight + heightVariation * noise.GetNoise(nx, nz);
-
-                density[x][y][z] = height - ny;
+                float surfaceY = getPlainsHeight(wx, wz);
+                density[x][y][z] = surfaceY - wy;  // >0 = inside ground
             }
-
     dirty = true;
 }
+
 
 float Chunk::getDensityAt(int x, int y, int z)
 {
@@ -60,14 +89,12 @@ float Chunk::getDensityAt(int x, int y, int z)
         z >= 0 && z <= CHUNK_SIZE)
         return density[x][y][z];
 
-    float nx = static_cast<float>(x + position.x * CHUNK_SIZE);
-    float ny = static_cast<float>(y);
-    float nz = static_cast<float>(z + position.y * CHUNK_SIZE);
+    float wx = (x + position.x * CHUNK_SIZE) * VOXEL_SIZE;
+    float wy = y * VOXEL_SIZE;
+    float wz = (z + position.y * CHUNK_SIZE) * VOXEL_SIZE;
 
-    float baseHeight = 8.0f;
-    float heightVariation = 8.0f;
-    float height = baseHeight + heightVariation * noise.GetNoise(nx, nz);
-    return height - ny;
+    float surfaceY = getPlainsHeight(wx, wz);
+    return surfaceY - wy;
 }
 
 void Chunk::polygoniseCube(int x, int y, int z,
@@ -143,14 +170,13 @@ void Chunk::polygoniseCube(int x, int y, int z,
 
         auto sampleDensity = [&](const glm::vec3& p) -> float
             {
+                // Convert the local vertex position back to absolute world space
                 float wx = p.x + position.x * CHUNK_SIZE * VOXEL_SIZE;
-                float wy = p.y;                                  // already world Y
+                float wy = p.y; // already world Y
                 float wz = p.z + position.y * CHUNK_SIZE * VOXEL_SIZE;
 
-                float baseHeight = 8.0f;
-                float heightVariation = 8.0f;
-                float height = baseHeight + heightVariation * noise.GetNoise(wx, wz);
-                return height - wy;
+                float surfaceY = getPlainsHeight(wx, wz);
+                return surfaceY - wy;                       // >0 below ground, <0 above
             };
 
         auto gradient = [&](const glm::vec3& p) -> glm::vec3

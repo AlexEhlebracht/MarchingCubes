@@ -58,7 +58,7 @@ private:
     bool running;
     std::queue<ChunkData> completedChunks;
     std::mutex completedMutex;
-    const int maxFinalizePerFrame = 1000; // Reduced from 2
+    const int maxFinalizePerFrame = 30; // Reduced from 2
 
     void queueChunks(const glm::ivec2& centerChunk, const glm::vec3& cameraPos);
     void unloadChunks(const glm::ivec2& centerChunk);

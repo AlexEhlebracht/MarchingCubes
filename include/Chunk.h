@@ -5,8 +5,10 @@
 #include <FastNoiseLite.h>
 
 #define CHUNK_SIZE 32
-#define CHUNK_HEIGHT 16
-#define VOXEL_SIZE 4
+#define CHUNK_HEIGHT 32
+#define VOXEL_SIZE 8
+#define BASE_HEIGHT 16
+#define HEIGHT_VARIATION 16
 
 class Chunk
 {
@@ -21,7 +23,11 @@ public:
         std::vector<glm::vec3>& normals, std::vector<unsigned int>& indices);
 
 private:
-    FastNoiseLite noise;
+    FastNoiseLite continentalNoise;
+    FastNoiseLite hillNoise;
+    FastNoiseLite detailNoise;
+    float getPlainsHeight(float wx, float wz) const;
+    float getPlainsNoise(float wx, float wz) const;
     std::vector<std::vector<std::vector<float>>> density;
     Mesh* mesh;
     bool dirty;
