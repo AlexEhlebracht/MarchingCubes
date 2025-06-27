@@ -6,42 +6,61 @@
 #define LOAD_RADIUS 4
 #define UNLOAD_RADIUS 5
 
-World::World() : lastUpdateTime(0.0f), running(true)
+/* ------------------------- */
+/* World Constructor / Destructor */
+/* ------------------------- */
+World::World()
+    : lastUpdateTime(0.0f), running(true), lastCameraChunk(0)
 {
-    lastCameraChunk = glm::ivec2(0);
-
-    // Start worker threads (use full hardware concurrency)
+    // Launch worker threads equal to hardware concurrency
     const int numThreads = std::max(1u, std::thread::hardware_concurrency());
     for (int i = 0; i < numThreads; ++i)
     {
         workers.emplace_back(&World::workerThread, this);
     }
 
+    // Initialize by updating at origin
     update(glm::vec3(0));
 }
 
 World::~World()
 {
+    // Signal workers to stop and join threads
     {
         std::lock_guard<std::mutex> lock(taskMutex);
         running = false;
     }
     taskCondition.notify_all();
+
     for (auto& worker : workers)
     {
         if (worker.joinable())
             worker.join();
     }
+
+    // Clean up all chunks
+    for (auto& entry : chunks)
+        delete entry.second;
+    chunks.clear();
 }
 
+/* ------------------------- */
+/* Update world: manage chunks loading/unloading */
+/* ------------------------- */
 void World::update(const glm::vec3& cameraPos)
 {
     float currentTime = glfwGetTime();
+
+    // Limit update frequency to 5Hz (every 0.2s)
     if (currentTime - lastUpdateTime < 0.2f)
         return;
+
     lastUpdateTime = currentTime;
 
+    // Determine which chunk the camera is currently in
     glm::ivec2 cameraChunk = glm::floor(glm::vec2(cameraPos.x, cameraPos.z) / float(CHUNK_SIZE * VOXEL_SIZE));
+
+    // Queue new chunks or unload distant ones only if camera chunk changed or no chunks loaded
     if (cameraChunk != lastCameraChunk || chunks.empty())
     {
         queueChunks(cameraChunk, cameraPos);
@@ -49,53 +68,71 @@ void World::update(const glm::vec3& cameraPos)
         lastCameraChunk = cameraChunk;
     }
 
+    // Process chunks completed by worker threads
     processCompletedChunks();
 }
 
+/* ------------------------- */
+/* Add nearby chunks to the task queue for generation */
+/* ------------------------- */
 void World::queueChunks(const glm::ivec2& centerChunk, const glm::vec3& cameraPos)
 {
     std::lock_guard<std::mutex> lock(taskMutex);
+
     for (int x = -LOAD_RADIUS; x <= LOAD_RADIUS; ++x)
+    {
         for (int z = -LOAD_RADIUS; z <= LOAD_RADIUS; ++z)
         {
             glm::ivec2 pos = centerChunk + glm::ivec2(x, z);
-            int distance = std::max(std::abs(x), std::abs(z));
-            if (distance > LOAD_RADIUS) continue;
+            int distanceGrid = std::max(std::abs(x), std::abs(z));
+            if (distanceGrid > LOAD_RADIUS) continue;
 
             if (chunks.find(pos) == chunks.end())
             {
-                // Calculate world position of chunk center
-                glm::vec3 chunkCenter = glm::vec3(pos.x * CHUNK_SIZE + CHUNK_SIZE / 2.0f,
+                // Calculate chunk center position in world space
+                glm::vec3 chunkCenter(
+                    pos.x * CHUNK_SIZE + CHUNK_SIZE / 2.0f,
                     CHUNK_HEIGHT / 2.0f,
                     pos.y * CHUNK_SIZE + CHUNK_SIZE / 2.0f);
+
                 float dist = glm::distance(cameraPos, chunkCenter);
                 taskQueue.push({ pos, dist });
             }
         }
-    taskCondition.notify_one();
+    }
+
+    taskCondition.notify_one();  // Wake one worker thread
 }
 
+/* ------------------------- */
+/* Worker thread function: generates chunk mesh data */
+/* ------------------------- */
 void World::workerThread()
 {
     while (true)
     {
         glm::ivec2 pos;
+
+        // Wait for task or shutdown signal
         {
             std::unique_lock<std::mutex> lock(taskMutex);
             taskCondition.wait(lock, [this] { return !taskQueue.empty() || !running; });
+
             if (!running && taskQueue.empty())
                 return;
+
             pos = taskQueue.top().pos;
             taskQueue.pop();
         }
 
+        // Create and generate chunk data
         Chunk* chunk = new Chunk(pos);
 
         std::vector<glm::vec3> vertices, colors, normals;
         std::vector<unsigned int> indices;
         bool hasMesh = chunk->generateData(vertices, colors, normals, indices);
 
-        // Store completed data
+        // Store completed chunk data for finalization in main thread
         {
             std::lock_guard<std::mutex> lock(completedMutex);
             completedChunks.push({ pos, chunk, vertices, colors, normals, indices, hasMesh });
@@ -103,9 +140,14 @@ void World::workerThread()
     }
 }
 
+/* ------------------------- */
+/* Finalize and upload completed chunk mesh data */
+/* ------------------------- */
 void World::processCompletedChunks()
 {
     std::queue<ChunkData> tempQueue;
+
+    // Move all completed chunks into temporary queue (thread safe)
     {
         std::lock_guard<std::mutex> lock(completedMutex);
         tempQueue = std::move(completedChunks);
@@ -113,6 +155,8 @@ void World::processCompletedChunks()
     }
 
     int finalizedThisFrame = 0;
+
+    // Finalize up to maxFinalizePerFrame chunks this frame
     while (!tempQueue.empty() && finalizedThisFrame < maxFinalizePerFrame)
     {
         ChunkData data = tempQueue.front();
@@ -120,7 +164,7 @@ void World::processCompletedChunks()
 
         if (chunks.find(data.pos) == chunks.end())
         {
-            if (data.hasMesh) // Skip empty chunks
+            if (data.hasMesh)
             {
                 data.chunk->finalize(data.vertices, data.colors, data.normals, data.indices);
                 chunks[data.pos] = data.chunk;
@@ -128,16 +172,16 @@ void World::processCompletedChunks()
             }
             else
             {
-                delete data.chunk; // Discard empty chunk
+                delete data.chunk;  // Discard empty chunk
             }
         }
         else
         {
-            delete data.chunk; // Chunk already exists, discard
+            delete data.chunk;  // Chunk already exists, discard duplicate
         }
     }
 
-    // Push remaining chunks back to completedChunks
+    // Return remaining chunks to completed queue for next frame
     if (!tempQueue.empty())
     {
         std::lock_guard<std::mutex> lock(completedMutex);
@@ -149,18 +193,23 @@ void World::processCompletedChunks()
     }
 }
 
+/* ------------------------- */
+/* Unload chunks far from camera to free memory */
+/* ------------------------- */
 void World::unloadChunks(const glm::ivec2& centerChunk)
 {
     std::vector<glm::ivec2> toRemove;
+
+    // Find chunks beyond unload radius
     for (const auto& entry : chunks)
     {
         glm::ivec2 pos = entry.first;
-        int distance = std::max(std::abs(pos.x - centerChunk.x),
-            std::abs(pos.y - centerChunk.y));
+        int distance = std::max(std::abs(pos.x - centerChunk.x), std::abs(pos.y - centerChunk.y));
         if (distance > UNLOAD_RADIUS)
             toRemove.push_back(pos);
     }
 
+    // Delete and remove those chunks
     for (const auto& pos : toRemove)
     {
         delete chunks[pos];
@@ -168,15 +217,17 @@ void World::unloadChunks(const glm::ivec2& centerChunk)
     }
 }
 
+/* ------------------------- */
+/* Check if a chunk is within the camera's view frustum */
+/* ------------------------- */
 bool World::isChunkInFrustum(const glm::ivec2& pos, const glm::vec3& cameraPos, const glm::mat4& viewProj)
 {
-    // Define chunk AABB in world space
+    // Define chunk bounding box in world space
     glm::vec3 minCorner(pos.x * CHUNK_SIZE * VOXEL_SIZE, 0.0f,
         pos.y * CHUNK_SIZE * VOXEL_SIZE);
-    glm::vec3 maxCorner = minCorner +
-        glm::vec3(CHUNK_SIZE, CHUNK_HEIGHT, CHUNK_SIZE) * float(VOXEL_SIZE);
+    glm::vec3 maxCorner = minCorner + glm::vec3(CHUNK_SIZE, CHUNK_HEIGHT, CHUNK_SIZE) * float(VOXEL_SIZE);
 
-    // 8 corners of the chunk's AABB
+    // 8 corners of AABB
     glm::vec3 corners[8] = {
         minCorner,
         { maxCorner.x, minCorner.y, minCorner.z },
@@ -190,20 +241,14 @@ bool World::isChunkInFrustum(const glm::ivec2& pos, const glm::vec3& cameraPos, 
 
     // Extract frustum planes from view-projection matrix
     glm::vec4 planes[6];
-    // Left: row3 + row1
-    planes[0] = glm::row(viewProj, 3) + glm::row(viewProj, 0);
-    // Right: row3 - row1
-    planes[1] = glm::row(viewProj, 3) - glm::row(viewProj, 0);
-    // Bottom: row3 + row2
-    planes[2] = glm::row(viewProj, 3) + glm::row(viewProj, 1);
-    // Top: row3 - row2
-    planes[3] = glm::row(viewProj, 3) - glm::row(viewProj, 1);
-    // Near: row3 + row3 (assuming OpenGL convention)
-    planes[4] = glm::row(viewProj, 3) + glm::row(viewProj, 2);
-    // Far: row3 - row3
-    planes[5] = glm::row(viewProj, 3) - glm::row(viewProj, 2);
+    planes[0] = glm::row(viewProj, 3) + glm::row(viewProj, 0); // Left
+    planes[1] = glm::row(viewProj, 3) - glm::row(viewProj, 0); // Right
+    planes[2] = glm::row(viewProj, 3) + glm::row(viewProj, 1); // Bottom
+    planes[3] = glm::row(viewProj, 3) - glm::row(viewProj, 1); // Top
+    planes[4] = glm::row(viewProj, 3) + glm::row(viewProj, 2); // Near
+    planes[5] = glm::row(viewProj, 3) - glm::row(viewProj, 2); // Far
 
-    // Normalize planes (normals point outward)
+    // Normalize planes
     for (int i = 0; i < 6; ++i)
     {
         float length = glm::length(glm::vec3(planes[i]));
@@ -211,13 +256,13 @@ bool World::isChunkInFrustum(const glm::ivec2& pos, const glm::vec3& cameraPos, 
             planes[i] /= length;
     }
 
-    // Check if chunk is outside any frustum plane
+    // Check if all corners are outside any plane (chunk not visible)
     for (const auto& plane : planes)
     {
         bool inside = false;
         for (const auto& corner : corners)
         {
-            // Add small margin (1.0f) to avoid edge-case culling
+            // Small margin added to avoid culling edge cases
             if (glm::dot(plane, glm::vec4(corner, 1.0f)) + 1.0f >= 0)
             {
                 inside = true;
@@ -227,12 +272,17 @@ bool World::isChunkInFrustum(const glm::ivec2& pos, const glm::vec3& cameraPos, 
         if (!inside)
             return false;
     }
-    return true;
+
+    return true; // Chunk is inside frustum
 }
 
+/* ------------------------- */
+/* Render all visible chunks */
+/* ------------------------- */
 void World::draw(const Shader& shader, const glm::vec3& cameraPos, const glm::mat4& view, const glm::mat4& projection)
 {
     glm::mat4 viewProj = projection * view;
+
     for (auto& entry : chunks)
     {
         if (isChunkInFrustum(entry.first, cameraPos, viewProj))
@@ -241,6 +291,7 @@ void World::draw(const Shader& shader, const glm::vec3& cameraPos, const glm::ma
         }
         else
         {
+            // Could add optional chunk LOD or skip rendering silently
         }
     }
 }
