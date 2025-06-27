@@ -8,7 +8,6 @@
 #include <algorithm>
 #include <cmath>
 
-
 Chunk::Chunk(glm::ivec2 pos)
     : position(pos), mesh(nullptr), dirty(true)
 {
@@ -17,32 +16,29 @@ Chunk::Chunk(glm::ivec2 pos)
         std::vector<std::vector<float>>(CHUNK_HEIGHT + 1,
             std::vector<float>(CHUNK_SIZE + 1)));
 
-    // --- Continental (very low frequency) ---
+    voxelScale = float(VOXEL_SIZE) / DESIGN_VOXEL;
+
     continentalNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    continentalNoise.SetFrequency(0.0001f);          // big features
+    continentalNoise.SetFrequency(0.0001f / voxelScale);
     continentalNoise.SetFractalOctaves(4);
     continentalNoise.SetFractalGain(0.5f);
 
-    // --- Hills (low frequency) ---
     hillNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    hillNoise.SetFrequency(0.001f);
+    hillNoise.SetFrequency(0.001f / voxelScale);
     hillNoise.SetFractalOctaves(3);
     hillNoise.SetFractalGain(0.5f);
 
-    // --- Detail (medium frequency) ---
     detailNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    detailNoise.SetFrequency(0.003f);
+    detailNoise.SetFrequency(0.003f / voxelScale);
     detailNoise.SetFractalOctaves(2);
     detailNoise.SetFractalGain(0.4f);
 }
 
 Chunk::~Chunk()
 {
-    if (mesh)
-        delete mesh;
+    if (mesh) delete mesh;
 }
 
-// Return surface height in *world* units
 float Chunk::getPlainsNoise(float wx, float wz) const
 {
     float continental = continentalNoise.GetNoise(wx, wz) * 0.6f;
@@ -55,11 +51,7 @@ float Chunk::getPlainsNoise(float wx, float wz) const
 
 float Chunk::getPlainsHeight(float wx, float wz) const
 {
-    // macros are defined in *blocks*, not world units
-    const float base = BASE_HEIGHT * 4;
-    const float variation = HEIGHT_VARIATION * 4;
-
-    return base + variation * getPlainsNoise(wx, wz);  // world units
+    return BASE_HEIGHT_WORLD + HEIGHT_VARIATION_WORLD * getPlainsNoise(wx, wz);
 }
 
 void Chunk::generateDensityField()
@@ -76,11 +68,11 @@ void Chunk::generateDensityField()
                 float wz = (z + worldZ) * VOXEL_SIZE;
 
                 float surfaceY = getPlainsHeight(wx, wz);
-                density[x][y][z] = surfaceY - wy;  // >0 = inside ground
+                density[x][y][z] = surfaceY - wy;
             }
+
     dirty = true;
 }
-
 
 float Chunk::getDensityAt(int x, int y, int z)
 {
@@ -105,7 +97,17 @@ void Chunk::polygoniseCube(int x, int y, int z,
     int& indexOffset,
     float isoLevel)
 {
-    glm::vec3 cubeColor(39.0f / 255.0f, 138.0f / 255.0f, 69.0f / 255.0f);
+    auto getTerrainColor = [&](const glm::vec3& v) -> glm::vec3
+        {
+            float worldY = v.y;
+
+            if (worldY < WATER_LEVEL_WORLD)
+                return glm::vec3(0.2f, 0.4f, 1.0f);
+            else if (worldY < WATER_LEVEL_WORLD + 1.5f * VOXEL_SIZE)
+                return glm::vec3(0.93f, 0.85f, 0.55f);
+            else
+                return glm::vec3(0.25f, 0.6f, 0.25f);
+        };
 
     float d[8];
     d[0] = getDensityAt(x, y, z);
@@ -120,11 +122,10 @@ void Chunk::polygoniseCube(int x, int y, int z,
     bool allInside = true, allOutside = true;
     for (int i = 0; i < 8; ++i)
     {
-        if (d[i] <= isoLevel)
-            allInside = false;
-        if (d[i] >= isoLevel)
-            allOutside = false;
+        if (d[i] <= isoLevel) allInside = false;
+        if (d[i] >= isoLevel) allOutside = false;
     }
+
     if (allInside || allOutside)
         return;
 
@@ -162,21 +163,19 @@ void Chunk::polygoniseCube(int x, int y, int z,
         vertices.push_back(v1);
         vertices.push_back(v2);
 
-        colors.push_back(cubeColor);
-        colors.push_back(cubeColor);
-        colors.push_back(cubeColor);
+        colors.push_back(getTerrainColor(v0));
+        colors.push_back(getTerrainColor(v1));
+        colors.push_back(getTerrainColor(v2));
 
-        const float eps = 0.25f * VOXEL_SIZE;  // Gradient step in world units
+        const float eps = 0.25f * VOXEL_SIZE;
 
         auto sampleDensity = [&](const glm::vec3& p) -> float
             {
-                // Convert the local vertex position back to absolute world space
                 float wx = p.x + position.x * CHUNK_SIZE * VOXEL_SIZE;
-                float wy = p.y; // already world Y
+                float wy = p.y;
                 float wz = p.z + position.y * CHUNK_SIZE * VOXEL_SIZE;
-
                 float surfaceY = getPlainsHeight(wx, wz);
-                return surfaceY - wy;                       // >0 below ground, <0 above
+                return surfaceY - wy;
             };
 
         auto gradient = [&](const glm::vec3& p) -> glm::vec3
@@ -194,12 +193,9 @@ void Chunk::polygoniseCube(int x, int y, int z,
         glm::vec3 n1 = -glm::normalize(gradient(v1));
         glm::vec3 n2 = -glm::normalize(gradient(v2));
 
-        if (glm::length(n0) < 1e-3f)
-            n0 = glm::vec3(0.0f, 1.0f, 0.0f);
-        if (glm::length(n1) < 1e-3f)
-            n1 = glm::vec3(0.0f, 1.0f, 0.0f);
-        if (glm::length(n2) < 1e-3f)
-            n2 = glm::vec3(0.0f, 1.0f, 0.0f);
+        if (glm::length(n0) < 1e-3f) n0 = glm::vec3(0, 1, 0);
+        if (glm::length(n1) < 1e-3f) n1 = glm::vec3(0, 1, 0);
+        if (glm::length(n2) < 1e-3f) n2 = glm::vec3(0, 1, 0);
 
         normals.push_back(n0);
         normals.push_back(n1);
@@ -219,8 +215,6 @@ void Chunk::buildMeshData(std::vector<glm::vec3>& vertices,
 {
     if (!dirty)
         return;
-
-    double start = glfwGetTime();
 
     vertices.clear();
     colors.clear();
@@ -263,6 +257,7 @@ void Chunk::finalize(std::vector<glm::vec3>& vertices,
 {
     if (mesh)
         delete mesh;
+
     mesh = vertices.empty() ? nullptr : new Mesh(vertices, colors, normals, indices);
 }
 
