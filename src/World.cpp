@@ -220,24 +220,17 @@ void World::unloadChunks(const glm::ivec2& centerChunk)
 /* ------------------------- */
 /* Check if a chunk is within the camera's view frustum */
 /* ------------------------- */
-bool World::isChunkInFrustum(const glm::ivec2& pos, const glm::vec3& cameraPos, const glm::mat4& viewProj)
+bool World::isChunkInFrustum(const glm::ivec2& pos, const glm::mat4& viewProj)
 {
+    const float SHRINK = 1.0f;  // <1 means tighter culling, 1.0 means normal
+
     // Define chunk bounding box in world space
     glm::vec3 minCorner(pos.x * CHUNK_SIZE * VOXEL_SIZE, 0.0f,
         pos.y * CHUNK_SIZE * VOXEL_SIZE);
     glm::vec3 maxCorner = minCorner + glm::vec3(CHUNK_SIZE, CHUNK_HEIGHT, CHUNK_SIZE) * float(VOXEL_SIZE);
 
-    // 8 corners of AABB
-    glm::vec3 corners[8] = {
-        minCorner,
-        { maxCorner.x, minCorner.y, minCorner.z },
-        { minCorner.x, maxCorner.y, minCorner.z },
-        { maxCorner.x, maxCorner.y, minCorner.z },
-        { minCorner.x, minCorner.y, maxCorner.z },
-        { maxCorner.x, minCorner.y, maxCorner.z },
-        { minCorner.x, maxCorner.y, maxCorner.z },
-        maxCorner
-    };
+    glm::vec3 center = (minCorner + maxCorner) * 0.5f;
+    glm::vec3 extents = (maxCorner - minCorner) * 0.5f;
 
     // Extract frustum planes from view-projection matrix
     glm::vec4 planes[6];
@@ -256,24 +249,26 @@ bool World::isChunkInFrustum(const glm::ivec2& pos, const glm::vec3& cameraPos, 
             planes[i] /= length;
     }
 
-    // Check if all corners are outside any plane (chunk not visible)
-    for (const auto& plane : planes)
+    // Test each plane against the chunk's bounding box
+    for (int i = 0; i < 6; ++i)
     {
-        bool inside = false;
-        for (const auto& corner : corners)
-        {
-            // Small margin added to avoid culling edge cases
-            if (glm::dot(plane, glm::vec4(corner, 1.0f)) + 1.0f >= 0)
-            {
-                inside = true;
-                break;
-            }
-        }
-        if (!inside)
+        glm::vec3 n = glm::vec3(planes[i]);
+        float d = planes[i].w;
+
+        // Projected radius of the box onto plane normal, scaled by SHRINK
+        float r = (extents.x * std::abs(n.x) +
+            extents.y * std::abs(n.y) +
+            extents.z * std::abs(n.z)) * SHRINK;
+
+        // Signed distance from box center to plane
+        float s = glm::dot(n, center) + d;
+
+        // If completely outside this plane, cull
+        if (s + r < 0.0f)
             return false;
     }
 
-    return true; // Chunk is inside frustum
+    return true; // Intersects or is inside the frustum
 }
 
 /* ------------------------- */
@@ -285,7 +280,7 @@ void World::draw(const Shader& shader, const glm::vec3& cameraPos, const glm::ma
 
     for (auto& entry : chunks)
     {
-        if (isChunkInFrustum(entry.first, cameraPos, viewProj))
+        if (isChunkInFrustum(entry.first, viewProj))
         {
             entry.second->draw(shader);
         }

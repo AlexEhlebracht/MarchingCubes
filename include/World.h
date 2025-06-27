@@ -100,6 +100,5 @@ private:
 
     // Frustum culling helper to check if chunk is visible
     bool isChunkInFrustum(const glm::ivec2& pos,
-        const glm::vec3& cameraPos,
         const glm::mat4& viewProj);
 };
