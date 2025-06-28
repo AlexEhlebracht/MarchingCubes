@@ -1,4 +1,4 @@
-#define GLM_ENABLE_EXPERIMENTAL
+﻿#define GLM_ENABLE_EXPERIMENTAL
 #include "../include/Chunk.h"
 #include "../include/Voxel.h"
 #include <glm/gtc/noise.hpp>
@@ -10,38 +10,16 @@
 
 /* -------------------------- */
 /* Chunk Constructor          */
-/* Initializes noise generators */
 /* Allocates density 3D array */
 /* -------------------------- */
-Chunk::Chunk(glm::ivec2 pos)
-    : position(pos), mesh(nullptr), dirty(true)
+Chunk::Chunk(glm::ivec2 pos, const BiomeManager* biomeMgr)
+    : position(pos), biome(biomeMgr), mesh(nullptr), dirty(true)
 {
     // Allocate 3D density field with one extra for boundary (CHUNK_SIZE+1)
     density.resize(
         CHUNK_SIZE + 1,
         std::vector<std::vector<float>>(CHUNK_HEIGHT + 1,
             std::vector<float>(CHUNK_SIZE + 1)));
-
-    // Voxel scale relative to design voxel size
-    voxelScale = float(VOXEL_SIZE) / DESIGN_VOXEL;
-
-    // Configure continental noise (large scale terrain)
-    continentalNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    continentalNoise.SetFrequency(0.0001f / voxelScale);
-    continentalNoise.SetFractalOctaves(4);
-    continentalNoise.SetFractalGain(0.5f);
-
-    // Configure hill noise (medium scale features)
-    hillNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    hillNoise.SetFrequency(0.001f / voxelScale);
-    hillNoise.SetFractalOctaves(3);
-    hillNoise.SetFractalGain(0.5f);
-
-    // Configure detail noise (small scale features)
-    detailNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    detailNoise.SetFrequency(0.003f / voxelScale);
-    detailNoise.SetFractalOctaves(2);
-    detailNoise.SetFractalGain(0.4f);
 }
 
 /* -------------------------- */
@@ -52,30 +30,6 @@ Chunk::~Chunk()
 {
     if (mesh)
         delete mesh;
-}
-
-/* -------------------------- */
-/* Combine multiple noise layers to create plains noise value */
-/* Continental + hills + detail */
-/* Clamp result to [-1,1] */
-/* -------------------------- */
-float Chunk::getPlainsNoise(float wx, float wz) const
-{
-    float continental = continentalNoise.GetNoise(wx, wz) * 0.6f;
-    float hills = hillNoise.GetNoise(wx, wz) * 0.3f;
-    float detail = detailNoise.GetNoise(wx, wz) * 0.1f;
-
-    float n = continental + hills + detail;
-    return glm::clamp(n, -1.0f, 1.0f);
-}
-
-/* -------------------------- */
-/* Calculate surface height at world position (wx, wz) */
-/* Base height plus height variation scaled by noise */
-/* -------------------------- */
-float Chunk::getPlainsHeight(float wx, float wz) const
-{
-    return BASE_HEIGHT_WORLD + HEIGHT_VARIATION_WORLD * getPlainsNoise(wx, wz);
 }
 
 /* -------------------------- */
@@ -93,10 +47,10 @@ void Chunk::generateDensityField()
             for (int z = 0; z <= CHUNK_SIZE; ++z)
             {
                 float wx = (x + worldX) * VOXEL_SIZE;
-                float wy = y * VOXEL_SIZE;
                 float wz = (z + worldZ) * VOXEL_SIZE;
+                float wy = y * VOXEL_SIZE;
 
-                float surfaceY = getPlainsHeight(wx, wz);
+                float surfaceY = biome->sample(wx, wz).height;
                 density[x][y][z] = surfaceY - wy;
             }
 
@@ -114,13 +68,11 @@ float Chunk::getDensityAt(int x, int y, int z)
         z >= 0 && z <= CHUNK_SIZE)
         return density[x][y][z];
 
-    // Out of bounds: approximate using surface height
     float wx = (x + position.x * CHUNK_SIZE) * VOXEL_SIZE;
-    float wy = y * VOXEL_SIZE;
     float wz = (z + position.y * CHUNK_SIZE) * VOXEL_SIZE;
+    float wy = y * VOXEL_SIZE;
 
-    float surfaceY = getPlainsHeight(wx, wz);
-    return surfaceY - wy;
+    return biome->sample(wx, wz).height - wy;
 }
 
 /* -------------------------- */
@@ -135,18 +87,15 @@ void Chunk::polygoniseCube(int x, int y, int z,
     int& indexOffset,
     float isoLevel)
 {
-    // Lambda to pick vertex color based on height (water, beach, grass)
-    auto getTerrainColor = [&](const glm::vec3& v) -> glm::vec3
-        {
-            float worldY = v.y;
-
-            if (worldY < WATER_LEVEL_WORLD)
-                return glm::vec3(0.2f, 0.4f, 1.0f); // Water - blue
-            else if (worldY < WATER_LEVEL_WORLD + 1.5f * VOXEL_SIZE)
-                return glm::vec3(0.93f, 0.85f, 0.55f); // Beach - sandy
-            else
-                return glm::vec3(0.25f, 0.6f, 0.25f); // Grass - green
-        };
+    // Colour helper that blends biomes
+    auto vertexColour = [&](const glm::vec3& vLocal) -> glm::vec3
+    {
+        float wx = vLocal.x + position.x * CHUNK_SIZE * VOXEL_SIZE;
+        float wz = vLocal.z + position.y * CHUNK_SIZE * VOXEL_SIZE;
+        float wy = vLocal.y;
+        auto sample = biome->sample(wx, wz);
+        return biome->blendedSurfaceColor(wy, sample.oceanWeight, wx, wz);
+    };
 
     // Get densities at cube corners
     float d[8];
@@ -207,32 +156,31 @@ void Chunk::polygoniseCube(int x, int y, int z,
         vertices.push_back(v2);
 
         // Assign colors based on vertex height
-        colors.push_back(getTerrainColor(v0));
-        colors.push_back(getTerrainColor(v1));
-        colors.push_back(getTerrainColor(v2));
+        colors.push_back(vertexColour(v0));
+        colors.push_back(vertexColour(v1));
+        colors.push_back(vertexColour(v2));
 
         // Calculate normals by sampling density gradient
         const float eps = 0.25f * VOXEL_SIZE;
 
-        auto sampleDensity = [&](const glm::vec3& p) -> float
-            {
-                float wx = p.x + position.x * CHUNK_SIZE * VOXEL_SIZE;
-                float wy = p.y;
-                float wz = p.z + position.y * CHUNK_SIZE * VOXEL_SIZE;
-                float surfaceY = getPlainsHeight(wx, wz);
-                return surfaceY - wy;
-            };
+        auto densitySample = [&](const glm::vec3& p) -> float
+        {
+            float wx = p.x + position.x * CHUNK_SIZE * VOXEL_SIZE;
+            float wz = p.z + position.y * CHUNK_SIZE * VOXEL_SIZE;
+            float wy = p.y;
+            return biome->sample(wx, wz).height - wy;
+        };
 
         auto gradient = [&](const glm::vec3& p) -> glm::vec3
-            {
-                float dx = sampleDensity(glm::vec3(p.x + eps, p.y, p.z)) -
-                    sampleDensity(glm::vec3(p.x - eps, p.y, p.z));
-                float dy = sampleDensity(glm::vec3(p.x, p.y + eps, p.z)) -
-                    sampleDensity(glm::vec3(p.x, p.y - eps, p.z));
-                float dz = sampleDensity(glm::vec3(p.x, p.y, p.z + eps)) -
-                    sampleDensity(glm::vec3(p.x, p.y, p.z - eps));
-                return glm::vec3(dx, dy, dz);
-            };
+        {
+            float dx = densitySample(glm::vec3(p.x + eps, p.y, p.z)) -
+                densitySample(glm::vec3(p.x - eps, p.y, p.z));
+            float dy = densitySample(glm::vec3(p.x, p.y + eps, p.z)) -
+                densitySample(glm::vec3(p.x, p.y - eps, p.z));
+            float dz = densitySample(glm::vec3(p.x, p.y, p.z + eps)) -
+                densitySample(glm::vec3(p.x, p.y, p.z - eps));
+            return glm::vec3(dx, dy, dz);
+        };
 
         glm::vec3 n0 = -glm::normalize(gradient(v0));
         glm::vec3 n1 = -glm::normalize(gradient(v1));

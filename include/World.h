@@ -71,6 +71,8 @@ public:
     std::unordered_map<glm::ivec2, Chunk*, Vec2Hash> chunks;
 
 private:
+    BiomeManager* biomeMgr;
+
     glm::ivec2 lastCameraChunk;            // Last chunk the camera was in
     float lastUpdateTime = 0.0f;           // Time of last update call
 

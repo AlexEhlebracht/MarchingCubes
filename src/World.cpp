@@ -3,8 +3,8 @@
 #include <iostream>
 #include <glm/gtc/matrix_access.hpp>
 
-#define LOAD_RADIUS 4
-#define UNLOAD_RADIUS 5
+#define LOAD_RADIUS 8
+#define UNLOAD_RADIUS 10
 
 /* ------------------------- */
 /* World Constructor / Destructor */
@@ -12,6 +12,10 @@
 World::World()
     : lastUpdateTime(0.0f), running(true), lastCameraChunk(0)
 {
+    // Create shared biome manager
+    float voxelScale = float(VOXEL_SIZE) / DESIGN_VOXEL;
+    biomeMgr = new BiomeManager(voxelScale, WATER_LEVEL_WORLD);
+
     // Launch worker threads equal to hardware concurrency
     const int numThreads = std::max(1u, std::thread::hardware_concurrency());
     for (int i = 0; i < numThreads; ++i)
@@ -126,7 +130,7 @@ void World::workerThread()
         }
 
         // Create and generate chunk data
-        Chunk* chunk = new Chunk(pos);
+        Chunk* chunk = new Chunk(pos, biomeMgr);
 
         std::vector<glm::vec3> vertices, colors, normals;
         std::vector<unsigned int> indices;

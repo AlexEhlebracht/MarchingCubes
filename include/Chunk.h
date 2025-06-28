@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <glm/glm.hpp>
 #include <vector>
 #include "Mesh.h"
-#include <FastNoiseLite.h>
+#include "../include/BiomeManager.h"
 
 /* ------------------------- */
 /* Configuration constants */
@@ -27,7 +27,7 @@ class Chunk
 {
 public:
     // Constructor takes chunk position in chunk coordinates (x,z)
-    explicit Chunk(glm::ivec2 pos);
+    explicit Chunk(glm::ivec2 pos, const BiomeManager* biomeMgr);
 
     // Destructor cleans up allocated mesh
     ~Chunk();
@@ -52,23 +52,14 @@ public:
     glm::ivec2 position;
 
 private:
-    // Noise generators for procedural terrain shaping
-    FastNoiseLite continentalNoise;
-    FastNoiseLite hillNoise;
-    FastNoiseLite detailNoise;
-    FastNoiseLite beachNoise; // Optional: for shoreline variation if used
-
-    float voxelScale; // Scale of each voxel in world units
+    // BiomeManager to know what biome the chunk is
+    const BiomeManager* biome;
 
     // 3D density field: density[x][y][z]
     std::vector<std::vector<std::vector<float>>> density;
 
     Mesh* mesh;      // Mesh object containing vertex buffers, etc.
     bool dirty;      // Flag indicating mesh needs rebuilding
-
-    // Helper functions to generate terrain noise and heights
-    float getPlainsNoise(float wx, float wz) const;
-    float getPlainsHeight(float wx, float wz) const;
 
     // Retrieves density value at voxel coordinates (including boundary)
     float getDensityAt(int x, int y, int z);

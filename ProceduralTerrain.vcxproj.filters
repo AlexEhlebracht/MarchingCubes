@@ -15,6 +15,12 @@
     <Filter Include="Resource Files\Shaders">
       <UniqueIdentifier>{1c3fd2dc-46de-4a8f-a075-a7e0c6c0899f}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\Biomes">
+      <UniqueIdentifier>{19dd5d90-f91b-45da-b401-b5bb3da8f674}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Include Files\Biomes">
+      <UniqueIdentifier>{59a0a28e-4426-47cb-ba91-6966cc352755}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <None Include="res\shaders\mc.vert">
@@ -49,6 +55,15 @@
     <ClCompile Include="src\World.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\PlainsBiome.cpp">
+      <Filter>Source Files\Biomes</Filter>
+    </ClCompile>
+    <ClCompile Include="src\OceanBiome.cpp">
+      <Filter>Source Files\Biomes</Filter>
+    </ClCompile>
+    <ClCompile Include="src\BiomeManager.cpp">
+      <Filter>Source Files\Biomes</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\Camera.h">
@@ -68,6 +83,18 @@
     </ClInclude>
     <ClInclude Include="include\World.h">
       <Filter>Include Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Biome.h">
+      <Filter>Include Files\Biomes</Filter>
+    </ClInclude>
+    <ClInclude Include="include\PlainsBiome.h">
+      <Filter>Include Files\Biomes</Filter>
+    </ClInclude>
+    <ClInclude Include="include\OceanBiome.h">
+      <Filter>Include Files\Biomes</Filter>
+    </ClInclude>
+    <ClInclude Include="include\BiomeManager.h">
+      <Filter>Include Files\Biomes</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

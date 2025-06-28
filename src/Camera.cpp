@@ -1,6 +1,6 @@
 #include "../include/Camera.h"
 
-Camera::Camera(glm::vec3 position) : Front({ 0.0f, 0.0f, -1.0f }), Speed(20.0f), Sensitivity(0.1f), Zoom(45.0f)
+Camera::Camera(glm::vec3 position) : Front({ 0.0f, 0.0f, -1.0f }), Speed(80.0f), Sensitivity(0.1f), Zoom(45.0f)
 {
     Position = position;
     WorldUp = { 0.0f, 1.0f, 0.0f };

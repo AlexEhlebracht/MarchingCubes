@@ -10,7 +10,7 @@
 #include "../include/World.h"
 
 // Camera setup and global variables for mouse input handling
-Camera camera(glm::vec3(40.0f, 138.0f, 40.0f));
+Camera camera(glm::vec3(40.0f, 300.0f, 40.0f));
 float lastX = 800.0f / 2.0f;
 float lastY = 600.0f / 2.0f;
 bool firstMouse = true;
